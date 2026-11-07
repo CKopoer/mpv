@@ -126,6 +126,11 @@ mpv_args=(
     -D{amf,d3d11,javascript,lcms2,libbluray,libcurl,shaderc,sixel}=enabled
     -D{spirv-cross,subrandr,vapoursynth,vulkan,win32-smtc,zimg}=enabled
 )
+if [[ ${BILISAIL_WINDOWS_ANGLE:-0} == 1 ]]; then
+    # libmpv's GLES render API needs this mapper too. Do not silently build a
+    # Windows SDK that only supports the native D3D11 renderer.
+    mpv_args+=(-Degl-angle=enabled -Degl-angle-lib=disabled -Degl-angle-win32=enabled)
+fi
 if $gpl; then
     # Only the GPL image carries the dependencies of the GPL features.
     mpv_args+=(-D{dvda,dvdnav,rubberband}=enabled)

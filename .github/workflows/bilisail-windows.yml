@@ -19,17 +19,30 @@ jobs:
       LUAJIT_REF: ea9eb7edb5eac4a9d175d74523db34fac0fa5180
       SIXEL_REF: 3c9fd6a294b2d0338482f9a5d5772827d82cfa9d
       SUBRANDR_REF: a41311bb5e382abcc47ef141e2ea1098d22a8d58
+      BILISAIL_WINDOWS_ANGLE: '1'
       WINEPREFIX: /tmp/wine
     steps:
       - uses: actions/checkout@v7
       - name: Trust the checked out source in the container
         run: git config --global --add safe.directory "$PWD"
+      - name: Install the application's pinned ANGLE headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y 7zip
+          wget -q https://github.com/CKopoer/media-kit/releases/download/native-2026-11-07/ANGLE.7z
+          echo 'cc5911bb15d596fd5a2b362613ad35b7093b427117269a7359054a65746a5f9a  ANGLE.7z' | sha256sum -c -
+          7zz x ANGLE.7z -oangle
+          cp -a angle/include/. "$FFBUILD_PREFIX/include/"
       - name: Build the pinned LGPL SDK
         run: ./ci/build-mingw64-full.sh
       - name: Record sources, configuration and licenses
         shell: bash
         run: |
           set -euo pipefail
+          grep -E '^#define HAVE_EGL_ANGLE 1$' build/config.h
+          grep -E '^#define HAVE_D3D_HWACCEL 1$' build/config.h
           mkdir -p artifact-libmpv/provenance/licenses
           git rev-parse HEAD > artifact-libmpv/provenance/mpv.commit
           for source in ffmpeg LuaJIT libsixel subrandr; do
@@ -39,7 +52,11 @@ jobs:
           cp build/meson-info/intro-buildoptions.json artifact-libmpv/provenance/
           cp build/meson-info/intro-dependencies.json artifact-libmpv/provenance/
           cp ci/build-mingw64-full.sh ci/build-common.sh .github/workflows/bilisail-windows.yml artifact-libmpv/provenance/
-          cp -a "$FFBUILD_PREFIX/share/licenses/." artifact-libmpv/provenance/licenses/ 2>/dev/null || true
+          while IFS= read -r -d '' notice; do
+            relative="${notice#"$FFBUILD_PREFIX/share/"}"
+            mkdir -p "artifact-libmpv/provenance/licenses/$(dirname "$relative")"
+            cp "$notice" "artifact-libmpv/provenance/licenses/$relative"
+          done < <(find "$FFBUILD_PREFIX/share" -type f \( -iname '*license*' -o -iname '*copying*' -o -iname '*copyright*' -o -iname '*authors*' -o -iname '*notice*' \) -print0)
           cp LICENSE.LGPL Copyright artifact-libmpv/provenance/
           cp ffmpeg/COPYING.LGPLv3 ffmpeg/COPYING.GPLv3 artifact-libmpv/provenance/
           find "$FFBUILD_PREFIX/share" -maxdepth 3 -type f > artifact-libmpv/provenance/toolchain-share-files.txt
