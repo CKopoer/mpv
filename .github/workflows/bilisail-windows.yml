@@ -29,11 +29,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          apt-get update -qq
-          apt-get install -y 7zip
           wget -q https://github.com/CKopoer/media-kit/releases/download/native-2026-11-07/ANGLE.7z
           echo 'cc5911bb15d596fd5a2b362613ad35b7093b427117269a7359054a65746a5f9a  ANGLE.7z' | sha256sum -c -
-          7zz x ANGLE.7z -oangle
+          archive_tool="$(command -v 7zz || command -v 7z)"
+          "$archive_tool" x ANGLE.7z -oangle
           cp -a angle/include/. "$FFBUILD_PREFIX/include/"
       - name: Build the pinned LGPL SDK
         run: ./ci/build-mingw64-full.sh
