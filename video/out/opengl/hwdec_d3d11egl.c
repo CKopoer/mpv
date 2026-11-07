@@ -69,6 +69,9 @@ struct priv_owner {
 struct priv {
     EGLStreamKHR egl_stream;
     GLuint gl_textures[2];
+    ID3D11DeviceContext *d3d11_context;
+    ID3D11Texture2D *visible_texture;
+    bool acquired;
 };
 
 static void uninit(struct ra_hwdec *hw)
@@ -211,6 +214,10 @@ static void mapper_uninit(struct ra_hwdec_mapper *mapper)
     p->egl_stream = 0;
 
     gl->DeleteTextures(2, p->gl_textures);
+    if (p->visible_texture)
+        ID3D11Texture2D_Release(p->visible_texture);
+    if (p->d3d11_context)
+        ID3D11DeviceContext_Release(p->d3d11_context);
 }
 
 static int mapper_init(struct ra_hwdec_mapper *mapper)
@@ -235,6 +242,8 @@ static int mapper_init(struct ra_hwdec_mapper *mapper)
     mapper->dst_params = mapper->src_params;
     mapper->dst_params.imgfmt = mapper->src_params.hw_subfmt;
     mapper->dst_params.hw_subfmt = 0;
+
+    ID3D11Device_GetImmediateContext(o->d3d11_device, &p->d3d11_context);
 
     // The texture units need to be bound during init only, and are free for
     // use again after the initialization here is done.
@@ -295,6 +304,55 @@ static int mapper_map(struct ra_hwdec_mapper *mapper)
     if (!d3d_tex)
         return -1;
 
+    D3D11_TEXTURE2D_DESC texdesc;
+    ID3D11Texture2D_GetDesc(d3d_tex, &texdesc);
+    // Decoder surfaces can include macroblock alignment padding. Sampling
+    // them directly lets chroma reconstruction and scaling read that padding,
+    // rather than extending the last visible texel. This causes green edges
+    // with e.g. AV1 on AMD and NVIDIA. Keep the transfer on the same GPU, but
+    // give ANGLE a surface whose extent matches the visible 4:2:0 planes.
+    const UINT width = (mapper->src_params.w + 1u) & ~1u;
+    const UINT height = (mapper->src_params.h + 1u) & ~1u;
+    if (!width || !height || width > texdesc.Width || height > texdesc.Height)
+        return -1;
+    if (width != texdesc.Width || height != texdesc.Height) {
+        D3D11_TEXTURE2D_DESC copy_desc = texdesc;
+        copy_desc.Width = width;
+        copy_desc.Height = height;
+        copy_desc.MipLevels = 1;
+        copy_desc.ArraySize = 1;
+        copy_desc.SampleDesc = (DXGI_SAMPLE_DESC){1, 0};
+        copy_desc.Usage = D3D11_USAGE_DEFAULT;
+        copy_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        copy_desc.CPUAccessFlags = 0;
+        copy_desc.MiscFlags = 0;
+        if (p->visible_texture) {
+            D3D11_TEXTURE2D_DESC existing;
+            ID3D11Texture2D_GetDesc(p->visible_texture, &existing);
+            if (existing.Width != width || existing.Height != height ||
+                existing.Format != copy_desc.Format) {
+                ID3D11Texture2D_Release(p->visible_texture);
+                p->visible_texture = NULL;
+            }
+        }
+        if (!p->visible_texture) {
+            HRESULT hr = ID3D11Device_CreateTexture2D(o->d3d11_device,
+                &copy_desc, NULL, &p->visible_texture);
+            if (FAILED(hr)) {
+                MP_ERR(mapper, "Cannot create visible D3D11 surface: %s\n",
+                       mp_HRESULT_to_str(hr));
+                return -1;
+            }
+        }
+        D3D11_BOX box = {0, 0, 0, width, height, 1};
+        ID3D11DeviceContext_CopySubresourceRegion(p->d3d11_context,
+            (ID3D11Resource *)p->visible_texture, 0, 0, 0, 0,
+            (ID3D11Resource *)d3d_tex, d3d_subindex, &box);
+        d3d_tex = p->visible_texture;
+        d3d_subindex = 0;
+        texdesc = copy_desc;
+    }
+
     EGLAttrib attrs[] = {
         EGL_D3D_TEXTURE_SUBRESOURCE_ID_ANGLE, d3d_subindex,
         EGL_NONE,
@@ -311,9 +369,7 @@ static int mapper_map(struct ra_hwdec_mapper *mapper)
 
     if (!o->StreamConsumerAcquireKHR(o->egl_display, p->egl_stream))
         return -1;
-
-    D3D11_TEXTURE2D_DESC texdesc;
-    ID3D11Texture2D_GetDesc(d3d_tex, &texdesc);
+    p->acquired = true;
 
     for (int n = 0; n < 2; n++) {
         struct ra_tex_params params = {
@@ -345,8 +401,10 @@ static void mapper_unmap(struct ra_hwdec_mapper *mapper)
 
     for (int n = 0; n < 2; n++)
         ra_tex_free(mapper->ra, &mapper->tex[n]);
-    if (p->egl_stream)
+    if (p->acquired) {
         o->StreamConsumerReleaseKHR(o->egl_display, p->egl_stream);
+        p->acquired = false;
+    }
 }
 
 const struct ra_hwdec_driver ra_hwdec_d3d11egl = {

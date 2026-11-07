@@ -1,0 +1,71 @@
+name: BiliSail Windows LGPL SDK
+
+on:
+  push:
+    branches: [codex/windows-hwdec-plane-bounds]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/btbn/ffmpeg-builds/win64-lgpl@sha256:291298c28290ea30b94a224cb2545d1f2df922fe9445d1866036eabbeb246a3f
+    env:
+      FFMPEG_REF: 615b07170e30d79ad5906418ea49f81c3cbd8457
+      LUAJIT_REF: ea9eb7edb5eac4a9d175d74523db34fac0fa5180
+      SIXEL_REF: 3c9fd6a294b2d0338482f9a5d5772827d82cfa9d
+      SUBRANDR_REF: a41311bb5e382abcc47ef141e2ea1098d22a8d58
+      WINEPREFIX: /tmp/wine
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the pinned LGPL SDK
+        run: ./ci/build-mingw64-full.sh
+      - name: Record sources, configuration and licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact-libmpv/provenance/licenses
+          git rev-parse HEAD > artifact-libmpv/provenance/mpv.commit
+          for source in ffmpeg LuaJIT libsixel subrandr; do
+            git -C "$source" rev-parse HEAD > "artifact-libmpv/provenance/$source.commit"
+          done
+          cp ffmpeg/ffbuild/config.log artifact-libmpv/provenance/ffmpeg-config.log
+          cp build/meson-info/intro-buildoptions.json artifact-libmpv/provenance/
+          cp build/meson-info/intro-dependencies.json artifact-libmpv/provenance/
+          cp ci/build-mingw64-full.sh ci/build-common.sh .github/workflows/bilisail-windows.yml artifact-libmpv/provenance/
+          cp -a "$FFBUILD_PREFIX/share/licenses/." artifact-libmpv/provenance/licenses/ 2>/dev/null || true
+          cp LICENSE.LGPL Copyright artifact-libmpv/provenance/
+          cp ffmpeg/COPYING.LGPLv3 artifact-libmpv/provenance/
+          find artifact-libmpv -type f -print0 | sort -z | xargs -0 sha256sum > sdk-sha256.txt
+      - name: Package SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, zipfile
+          root = pathlib.Path('artifact-libmpv')
+          with zipfile.ZipFile('bilisail-libmpv-windows-x64.zip', 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+              for path in sorted(root.rglob('*')):
+                  if path.is_file():
+                      archive.write(path, path.relative_to(root))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bilisail-libmpv-windows-x64
+          path: |
+            bilisail-libmpv-windows-x64.zip
+            sdk-sha256.txt
+          if-no-files-found: error
+      - name: Preserve build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bilisail-libmpv-build-logs
+          path: |
+            build/meson-logs/
+            ffmpeg/ffbuild/config.log
+          if-no-files-found: ignore
