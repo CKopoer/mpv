@@ -22,6 +22,8 @@ jobs:
       WINEPREFIX: /tmp/wine
     steps:
       - uses: actions/checkout@v7
+      - name: Trust the checked out source in the container
+        run: git config --global --add safe.directory "$PWD"
       - name: Build the pinned LGPL SDK
         run: ./ci/build-mingw64-full.sh
       - name: Record sources, configuration and licenses
@@ -39,7 +41,9 @@ jobs:
           cp ci/build-mingw64-full.sh ci/build-common.sh .github/workflows/bilisail-windows.yml artifact-libmpv/provenance/
           cp -a "$FFBUILD_PREFIX/share/licenses/." artifact-libmpv/provenance/licenses/ 2>/dev/null || true
           cp LICENSE.LGPL Copyright artifact-libmpv/provenance/
-          cp ffmpeg/COPYING.LGPLv3 artifact-libmpv/provenance/
+          cp ffmpeg/COPYING.LGPLv3 ffmpeg/COPYING.GPLv3 artifact-libmpv/provenance/
+          find "$FFBUILD_PREFIX/share" -maxdepth 3 -type f > artifact-libmpv/provenance/toolchain-share-files.txt
+          printf '%s\n' 'ghcr.io/btbn/ffmpeg-builds/win64-lgpl@sha256:291298c28290ea30b94a224cb2545d1f2df922fe9445d1866036eabbeb246a3f' > artifact-libmpv/provenance/container.txt
           find artifact-libmpv -type f -print0 | sort -z | xargs -0 sha256sum > sdk-sha256.txt
       - name: Package SDK
         shell: bash
@@ -59,6 +63,21 @@ jobs:
           path: |
             bilisail-libmpv-windows-x64.zip
             sdk-sha256.txt
+          if-no-files-found: error
+      - name: Build a control with the original EGL mapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show 88eb9f2e73945d8bc9c133a2f67babaa9af34680:video/out/opengl/hwdec_d3d11egl.c > video/out/opengl/hwdec_d3d11egl.c
+          meson compile -C build
+          mkdir -p baseline-control
+          cp build/libmpv-2.dll baseline-control/
+          "${FFBUILD_CROSS_PREFIX}strip" baseline-control/libmpv-2.dll
+          printf '%s\n' 'Same source, compiler and dependencies; hwdec_d3d11egl.c restored from 88eb9f2e73945d8bc9c133a2f67babaa9af34680. For regression comparison only.' > baseline-control/README.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bilisail-libmpv-baseline-control
+          path: baseline-control/
           if-no-files-found: error
       - name: Preserve build diagnostics
         if: always()
