@@ -68,6 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git fetch --depth=1 origin 88eb9f2e73945d8bc9c133a2f67babaa9af34680
           git show 88eb9f2e73945d8bc9c133a2f67babaa9af34680:video/out/opengl/hwdec_d3d11egl.c > video/out/opengl/hwdec_d3d11egl.c
           meson compile -C build
           mkdir -p baseline-control
