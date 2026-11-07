@@ -31,6 +31,10 @@ endgroup() { echo "::endgroup::"; }
 
 group "Building FFmpeg"
 $gitclone https://github.com/FFmpeg/FFmpeg.git ffmpeg
+if [[ -n ${FFMPEG_REF:-} ]]; then
+    git -C ffmpeg fetch --depth=1 origin "$FFMPEG_REF"
+    git -C ffmpeg checkout --detach FETCH_HEAD
+fi
 pushd ffmpeg
 # rav1e and librsvg bring their own Rust runtime, which clashes with subrandr's.
 ./configure --prefix="$FFBUILD_PREFIX" --pkg-config-flags="--static" \
@@ -48,6 +52,10 @@ endgroup
 
 group "Building LuaJIT"
 $gitclone -b v2.1 https://github.com/LuaJIT/LuaJIT.git
+if [[ -n ${LUAJIT_REF:-} ]]; then
+    git -C LuaJIT fetch --depth=1 origin "$LUAJIT_REF"
+    git -C LuaJIT checkout --detach FETCH_HEAD
+fi
 pushd LuaJIT
 # Strip -ldl, not needed for Windows.
 sed -i "/^Libs\.private/d" etc/luajit.pc
@@ -61,6 +69,10 @@ endgroup
 
 group "Building libsixel"
 $gitclone https://github.com/saitoha/libsixel.git
+if [[ -n ${SIXEL_REF:-} ]]; then
+    git -C libsixel fetch --depth=1 origin "$SIXEL_REF"
+    git -C libsixel checkout --detach FETCH_HEAD
+fi
 pushd libsixel
 ./configure --prefix="$FFBUILD_PREFIX" --host="$FFBUILD_TOOLCHAIN" --disable-shared \
             --disable-{img2sixel,sixel2png,python} --without-{jpeg,libcurl,png}
@@ -142,6 +154,11 @@ mpv_args=(
     -D{shaderc,sixel,spirv-cross,subrandr,uchardet,vapoursynth,vulkan}=enabled
     -D{win32-smtc,zimg}=enabled
 )
+if [[ ${BILISAIL_WINDOWS_ANGLE:-0} == 1 ]]; then
+    # libmpv's GLES render API needs this mapper too. Do not silently build a
+    # Windows SDK that only supports the native D3D11 renderer.
+    mpv_args+=(-Degl-angle=enabled -Degl-angle-lib=disabled -Degl-angle-win32=enabled)
+fi
 if $gpl; then
     # Only the GPL image carries the dependencies of the GPL features.
     mpv_args+=(-D{dvda,dvdnav,rubberband}=enabled)
